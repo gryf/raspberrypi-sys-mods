@@ -3,18 +3,19 @@
 # pylint: disable=missing-function-docstring
 # pylint: disable=missing-module-docstring
 
-import subprocess
 import argparse
-import logging
 import crypt
+import logging
 import os
+import subprocess
 import sys
+
 import toml
 
 __version__ = "1.0"
 
-imager_custom_path = os.path.join('/', 'usr', 'lib', 'raspberrypi-sys-mods', 'imager_custom')
-userconf_path = os.path.join('/', 'usr', 'lib', 'userconf-pi', 'userconf')
+imager_custom_path = '/usr/lib/raspberrypi-sys-mods/imager_custom'
+userconf_path = '/usr/lib/userconf-pi/userconf'
 
 def set_hostname (hostname):
     if not hostname:
@@ -24,24 +25,26 @@ def set_hostname (hostname):
         subprocess.run(cmd, encoding='UTF-8', check=True)
         logging.info("Hostname set to %s", hostname)
     except subprocess.CalledProcessError:
-        logging.error("Failed to set hostname")
+        logging.exception("Failed to set hostname")
 
 def config_system(system_config):
     set_hostname(system_config.pop("hostname", None))
 
-def rename_user(name, password, is_encrypted=True):
+def rename_user(name, password, is_encrypted):
     if not name and not password:
         return
     try:
         for frloc in ('/boot/firstrun.sh', '/boot/firmware/firstrun.sh'):
-            with open(frloc, 'r') as f:
+            with open(frloc) as f:
                 if '/usr/lib/userconf-pi/userconf' in f.read():
-                    logging.error ("User configuration skipped: conflicts with firstrun.sh")
+                    logging.exception("User configuration skipped: conflicts "
+                                      "with firstrun.sh")
                     return
     except FileNotFoundError:
         pass
     if not name:
-        logging.error ("User configuration skipped: specified a password without a username")
+        logging.error("User configuration skipped: specified a password "
+                      "without a username")
         return
     if not password:
         logging.warning("%s will be locked. No password specified", name)
@@ -55,7 +58,7 @@ def rename_user(name, password, is_encrypted=True):
         subprocess.run(cmd, encoding='UTF-8', check=True)
         logging.info ("User renamed to %s", name)
     except subprocess.CalledProcessError:
-        logging.error("Failed to rename user %s", name)
+        logging.exception("Failed to rename user %s", name)
 
 def config_user(user_config):
     name = user_config.pop("name", None)
@@ -74,34 +77,36 @@ def import_ssh_id(ids):
         subprocess.run(cmd, encoding='UTF-8', check=True)
         logging.info ("Importing pubkeys for: %s", ", ".join(ids))
     except subprocess.CalledProcessError:
-        logging.error("Failed to import pubkeys for %s", ", ".join(ids))
+        logging.exception("Failed to import pubkeys for %s", ", ".join(ids))
 
 def config_ssh (ssh_config):
     if not ssh_config:
         return
     ssh_import_id = ssh_config.pop("ssh_import_id", None)
     import_ssh_id(ssh_import_id)
-    cmd = (imager_custom_path, "enable_ssh")
+    cmd = [imager_custom_path, "enable_ssh"]
     ssh_enabled = ssh_config.pop("enabled", False)
-    ssh_password_authentication = ssh_config.pop("password_authentication", None)
+    ssh_password_authentication = ssh_config.pop("password_authentication",
+                                                 None)
     ssh_authorized_keys = ssh_config.pop("authorized_keys", [])
     if not ssh_enabled:
-        cmd = cmd + ('-d',)
+        cmd.append('-d')
     if ssh_password_authentication is not None:
-        cmd = cmd + ('-p' if ssh_password_authentication else '-k',)
-    cmd = cmd + tuple(ssh_authorized_keys)
+        cmd.append('-p' if ssh_password_authentication else '-k')
+    cmd.extend(ssh_authorized_keys)
     try:
         subprocess.run(cmd, encoding='UTF-8', check=True)
         logging.info ("Configured SSH")
     except subprocess.CalledProcessError:
-        logging.error("Failed to configure SSH")
+        logging.exception("Failed to configure SSH")
 
 def wpa_passphrase (ssid, passphrase):
     cmd = ('wpa_passphrase', ssid)
     proc = subprocess.run(cmd, stdout=subprocess.PIPE, input=passphrase,
                           encoding='UTF-8', check=True)
     output = (line.strip() for line in proc.stdout.splitlines())
-    psks = (line.split('=', maxsplit=1)[1] for line in output if line.startswith("psk="))
+    psks = (line.split('=', maxsplit=1)[1]
+            for line in output if line.startswith("psk="))
     return next(psks)
 
 def config_wlan (wlan_config):
@@ -127,7 +132,8 @@ def config_wlan (wlan_config):
             logging.error ("Failed to set WLAN country")
 
     if wlan_password and not wlan_ssid:
-        logging.error ("WLAN connection skipped: specified WLAN password without an SSID")
+        logging.error("WLAN connection skipped: specified WLAN password "
+                      "without an SSID")
         return
 
     if wlan_ssid:
@@ -144,9 +150,9 @@ def config_wlan (wlan_config):
 
     try:
         subprocess.run(cmd, encoding='UTF-8', check=True)
-        logging.info ("Configuring WLAN: %s", wlan_ssid)
+        logging.info("Configuring WLAN: %s", wlan_ssid)
     except subprocess.CalledProcessError:
-        logging.error ("Failed to configure WLAN")
+        logging.exception("Failed to configure WLAN")
 
 
 def set_keymap (keymap):
@@ -157,7 +163,8 @@ def set_keymap (keymap):
         subprocess.run(cmd, encoding='UTF-8', check=True)
         logging.info("Keymap set to %s", keymap)
     except subprocess.CalledProcessError:
-        logging.error("Failed to set keymap")
+        logging.exception("Failed to set keymap")
+
 
 def set_timezone (timezone):
     if not timezone:
@@ -169,27 +176,28 @@ def set_timezone (timezone):
     except subprocess.CalledProcessError:
         logging.error("Failed to set timezone")
 
+
 def config_locale (locale_config):
     set_keymap (locale_config.pop("keymap", None))
     set_timezone (locale_config.pop("timezone", None))
 
 
-parser = argparse.ArgumentParser(
-    description="Read and apply a custom configuration to Raspberry Pi OS from a TOML file"
-)
-parser.add_argument(
-    "toml_file", nargs="?", default="/dev/stdin",
-    help="Path to a TOML file containing initial configuration (defaults to stdin)",
-)
-parser.add_argument('--version', action='version', version=f"%(prog)s {__version__}")
+parser = argparse.ArgumentParser(description="Read and apply a custom "
+                                 "configuration to Raspberry Pi OS from a "
+                                 "TOML file")
+parser.add_argument("toml_file", nargs="?", default="/dev/stdin", help="Path "
+                    "to a TOML file containing initial configuration "
+                    "(defaults to stdin)")
+parser.add_argument('--version', action='version',
+                    version=f"%(prog)s {__version__}")
 args = parser.parse_args()
 
 logging.basicConfig(format="%(message)s", level=logging.INFO)
 
 try:
     config = toml.load(args.toml_file)
-except toml.decoder.TomlDecodeError as err:
-    logging.error ("Error parsing %s: %s", args.toml_file, err)
+except toml.decoder.TomlDecodeError:
+    logging.exception("Error parsing %s", args.toml_file)
     sys.exit(1)
 
 config_version = config.pop("config_version", None)
