@@ -272,9 +272,20 @@ def set_timezone (timezone):
         logging.error("Failed to set timezone")
 
 
-def config_locale (locale_config):
-    set_keymap (locale_config.pop("keymap", None))
-    set_timezone (locale_config.pop("timezone", None))
+def set_locale(locale):
+    if not locale:
+        return
+    cmd = ['sed', '-ie', f"s/en_GB.UTF-8/{locale}/", "/etc/default/locale"]
+    try:
+        subprocess.run(cmd, encoding='UTF-8', check=True)
+        logging.info("Setting system LANG variable to %s", locale)
+    except subprocess.CalledProcessError:
+        logging.exception("Failed to set locale")
+
+def config_locale(locale_config):
+    set_locale(locale_config.get("default_locale"))
+    set_keymap(locale_config.pop("keymap", None))
+    set_timezone(locale_config.pop("timezone", None))
 
 
 parser = argparse.ArgumentParser(description="Read and apply a custom "
