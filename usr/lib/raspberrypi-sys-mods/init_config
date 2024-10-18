@@ -9,6 +9,7 @@ import logging
 import os
 import subprocess
 import sys
+import uuid
 
 import toml
 
@@ -109,49 +110,101 @@ def wpa_passphrase (ssid, passphrase):
             for line in output if line.startswith("psk="))
     return next(psks)
 
-def config_wlan (wlan_config):
+
+def config_wlan(wlan_config):
     if not wlan_config:
         return
-    wlan_ssid = wlan_config.pop("ssid", None)
-    wlan_password = wlan_config.pop("password", None)
-    wlan_password_is_encrypted = wlan_config.pop("password_encrypted", True)
-    wlan_is_hidden = wlan_config.pop("hidden", False)
-    wlan_country = wlan_config.pop("country", "")
+    ssid = wlan_config.pop("ssid", None)
+    password = wlan_config.pop("password", None)
+    password_is_encrypted = wlan_config.pop("password_encrypted", True)
+    hidden = wlan_config.pop("hidden", False)
+    country = wlan_config.pop("country", "")
 
-    cmd = (imager_custom_path, "set_wlan")
-    if wlan_is_hidden:
-        cmd = cmd + ('-h',)
-
-    if wlan_country:
+    if country:
         try:
-            subprocess.run(
-                (imager_custom_path, "set_wlan_country", wlan_country),
-                encoding='UTF-8', check=True)
-            logging.info ("WLAN country set to %s", wlan_country)
+            subprocess.run([imager_custom_path, "set_wlan_country",
+                            country], encoding='UTF-8', check=True)
+            logging.info("WLAN country set to %s", country)
         except subprocess.CalledProcessError:
-            logging.error ("Failed to set WLAN country")
+            logging.exception("Failed to set WLAN country")
 
-    if wlan_password and not wlan_ssid:
+    if password and not ssid:
         logging.error("WLAN connection skipped: specified WLAN password "
                       "without an SSID")
         return
 
-    if wlan_ssid:
-        if wlan_password and not wlan_password_is_encrypted:
-            try:
-                wlan_password = wpa_passphrase (wlan_ssid, wlan_password)
-            except (subprocess.CalledProcessError, StopIteration):
-                cmd = cmd + ('-p',)
-                logging.warning ("Could not generate PSK for %s", wlan_ssid)
+    if ssid and password and not password_is_encrypted:
+        try:
+            password = wpa_passphrase(ssid, password)
+        except (subprocess.CalledProcessError, StopIteration):
+            logging.warning("Could not generate PSK for %s", ssid)
 
-        cmd = cmd + (wlan_ssid,)
-        if wlan_password:
-            cmd = cmd + (wlan_password,)
+    connection = "/etc/NetworkManager/system-connections/wireless.nmconnection"
+    ip = wlan_config.pop("ip", None)
+    gateway = wlan_config.pop("gateway", None)
+    netmask = wlan_config.pop("netmask", None)
+    nameservers = wlan_config.pop("dns", [])
+    if not all([ip, gateway, netmask, nameservers]):
+        config = f"""[connection]
+id=wireless
+uuid={uuid.uuid4()}
+type=wifi
+
+[wifi]
+mode=infrastructure
+ssid={ssid}
+hidden={hidden}
+
+[ipv4]
+method=auto
+
+[ipv6]
+addr-gen-mode=default
+method=auto
+
+[proxy]
+"""
+        if password:
+            connection += f"""[wifi-security]
+key-mgmt=wpa-psk
+psk={password}
+"""
+    else:
+        config = f"""[connection]
+id=yggdrasill
+uuid={uuid.uuid4()}
+type=wifi
+interface-name=wlan0
+
+[wifi]
+mode=infrastructure
+ssid={ssid}
+hidden={hidden}
+
+[wifi-security]
+auth-alg=open
+key-mgmt=wpa-psk
+psk={password}
+
+[ipv4]
+address1={ip}/{netmask},{gateway}
+dns={";".join(nameservers)}
+method=manual
+
+[ipv6]
+addr-gen-mode=stable-privacy
+dns-search=
+method=auto
+
+[proxy]
+"""
 
     try:
-        subprocess.run(cmd, encoding='UTF-8', check=True)
-        logging.info("Configuring WLAN: %s", wlan_ssid)
-    except subprocess.CalledProcessError:
+        with open(connection, "w") as fobj:
+            fobj.write(config)
+        subprocess.run(['chmod', '600', connection])
+        logging.info("Configuring WLAN: %s", ssid)
+    except (OSError, subprocess.CalledProcessError):
         logging.exception("Failed to configure WLAN")
 
 
